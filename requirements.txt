@@ -1,2 +1,4 @@
 pykrx
 requests
+yfinance
+anthropic
