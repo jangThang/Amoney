@@ -2,18 +2,21 @@
 미국지수 ETF 보유자용 텔레그램 알림 봇 (GitHub Actions / 로컬 공용)
 ============================================================
 보내는 정보:
-  1) 내 ETF        가격 + 1일/1주/1달 변동률 + 20/60/120일 이평선 위치  (pykrx / KRX)
-  2) 간밤 미국 지수  나스닥100(^NDX), S&P500(^GSPC) + 1일/1주/1달 변동    (yfinance)
-  3) 원/달러 환율    KRW=X + 1일/1주/1달 변동                            (yfinance)
-  4) 시장 분위기     VIX(^VIX) + CNN 공포·탐욕 지수                       (yfinance / CNN)
-  5) 뉴스           구글 뉴스 RSS (제목=기사 링크) + Claude Haiku 요약    (선택)
+  1) 내 ETF        가격 + 1일/1주/1달 변동률 + 20/60/120일 이평선 위치
+  2) 간밤 미국 지수  나스닥100(^NDX), S&P500(^GSPC) + 1일/1주/1달 변동
+  3) 원/달러 환율    KRW=X + 1일/1주/1달 변동
+  4) 시장 분위기     VIX(^VIX) + CNN 공포·탐욕 지수
+  5) 뉴스           구글 뉴스 RSS (제목=기사 링크) + Claude Haiku 요약 (선택)
 
-[준비물]  pip install pykrx requests yfinance anthropic
+※ 모든 시세는 yfinance(야후 파이낸스)로 통일했습니다.
+  국내 ETF는 야후 코드(종목코드 + ".KS")로 조회합니다.
+
+[준비물]  pip install requests yfinance anthropic
 
 [Secrets]
   TELEGRAM_TOKEN      (필수)
   CHAT_ID            (필수)
-  ANTHROPIC_API_KEY  (선택)  없으면 뉴스 요약은 생략하고 링크만 표시
+  ANTHROPIC_API_KEY  (선택)  없으면 뉴스 요약 생략하고 링크만 표시
 """
 
 import os
@@ -21,9 +24,9 @@ import html
 import requests
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
-from pykrx import stock
 import yfinance as yf
 
 # ============================================================
@@ -34,9 +37,10 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "여기에_봇_토큰_또는_S
 CHAT_ID = os.environ.get("CHAT_ID", "여기에_본인_chat_id_또는_Secrets사용")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")  # 없으면 None
 
+# 보유 ETF { "야후코드": "표시이름" }  (국내 ETF는 종목코드 + ".KS")
 HOLDINGS = {
-    "133690": "TIGER 미국나스닥100",
-    "360750": "TIGER 미국S&P500",
+    "133690.KS": "TIGER 미국나스닥100",
+    "360750.KS": "TIGER 미국S&P500",
 }
 
 NEWS_QUERY = "미국 증시 나스닥 S&P500 원달러 환율"
@@ -46,7 +50,6 @@ MA_WINDOWS = [20, 60, 120]                         # 이동평균선
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
-# 공포·탐욕 지수 등급 → (한글, 이모지)
 FG_KO = {
     "extreme fear": ("극도의 공포", "😱"),
     "fear": ("공포", "😨"),
@@ -55,7 +58,7 @@ FG_KO = {
     "extreme greed": ("극도의 탐욕", "🤑"),
 }
 
-esc = html.escape  # 텔레그램 HTML 모드용 텍스트 escape (& < > 처리)
+esc = html.escape  # 텔레그램 HTML 모드용 (& < > 처리)
 
 # ============================================================
 # 공통 유틸
@@ -79,8 +82,18 @@ def send_telegram(message: str) -> bool:
     return resp.ok
 
 
+def get_yf_closes(symbol, period="1y"):
+    """yfinance에서 종가 시계열을 가져온다. (120일 이평선 대비 1년치 확보)"""
+    hist = yf.Ticker(symbol).history(period=period)
+    if hist is None or hist.empty:
+        return None
+    return hist["Close"]
+
+
 def analyze(closes):
     """종가 시계열(오래된→최신)을 받아 {last, changes, mas} 반환."""
+    if closes is None:
+        return None
     closes = closes.dropna()
     closes = closes[closes > 0]
     if len(closes) < 2:
@@ -118,26 +131,6 @@ def fmt_mas(result, dec=0) -> str:
     return " · ".join(parts)
 
 
-# ============================================================
-# 데이터 수집
-# ============================================================
-
-def get_etf_closes(ticker):
-    today = datetime.now().strftime("%Y%m%d")
-    start = (datetime.now() - timedelta(days=250)).strftime("%Y%m%d")
-    df = stock.get_etf_ohlcv_by_date(start, today, ticker)
-    if df is None or df.empty:
-        return None
-    return df["종가"]
-
-
-def get_yf_closes(symbol):
-    hist = yf.Ticker(symbol).history(period="6mo")
-    if hist is None or hist.empty:
-        return None
-    return hist["Close"]
-
-
 def vix_label(v: float) -> str:
     if v < 15:
         return "매우 안정"
@@ -149,34 +142,44 @@ def vix_label(v: float) -> str:
 
 
 def get_fear_greed():
-    """CNN 공포·탐욕 지수 현재값과 등급을 반환. (score, rating)"""
+    """CNN 공포·탐욕 지수 (score, rating)."""
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     data = requests.get(url, headers={"User-Agent": UA, "Accept": "application/json"},
                         timeout=15).json()
     fg = data.get("fear_and_greed")
     if fg and "score" in fg:
         return float(fg["score"]), str(fg.get("rating", "")).lower()
-    hist = data["fear_and_greed_historical"]["data"]  # 폴백: 마지막 값
-    last = hist[-1]
+    last = data["fear_and_greed_historical"]["data"][-1]
     return float(last["y"]), str(last.get("rating", "")).lower()
 
 
-# ============================================================
-# 뉴스 (구글 뉴스 RSS) + AI 요약
-# ============================================================
-
-def fetch_news(query, n=6):
-    """(제목, 링크) 튜플 리스트를 반환."""
-    url = f"https://news.google.com/rss/search?q={quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
+def _fetch_rss(query, window):
+    """구글 뉴스 RSS에서 최근 window(예: '1d') 이내 기사를 (제목, 링크, 발행일시)로 반환."""
+    q = f"{query} when:{window}"   # when:1d = 최근 24시간, when:7d = 최근 7일
+    url = f"https://news.google.com/rss/search?q={quote(q)}&hl=ko&gl=KR&ceid=KR:ko"
     resp = requests.get(url, headers={"User-Agent": UA}, timeout=15)
     root = ET.fromstring(resp.content)
-    items = []
-    for item in root.findall(".//item")[:n]:
+    out = []
+    for item in root.findall(".//item"):
         title = item.findtext("title", "")
         link = item.findtext("link", "")
-        if title:
-            items.append((title, link))
-    return items
+        pub = item.findtext("pubDate", "")
+        if not title:
+            continue
+        try:
+            dt = parsedate_to_datetime(pub) if pub else None
+        except Exception:
+            dt = None
+        out.append((title, link, dt))
+    return out
+
+
+def fetch_news(query, n=5):
+    """최근 기사만 받아 최신순으로 정렬해 상위 n개의 (제목, 링크)를 반환."""
+    items = _fetch_rss(query, "1d") or _fetch_rss(query, "7d")  # 24시간 우선, 없으면 7일
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    items.sort(key=lambda x: x[2] or oldest, reverse=True)       # 발행일시 최신순
+    return [(t, l) for t, l, _ in items[:n]]
 
 
 def summarize_news(titles):
@@ -209,9 +212,9 @@ def build_report() -> str:
 
     # 1) 내 ETF
     lines.append("<b>📌 내 ETF</b>")
-    for ticker, name in HOLDINGS.items():
+    for symbol, name in HOLDINGS.items():
         try:
-            r = analyze(get_etf_closes(ticker))
+            r = analyze(get_yf_closes(symbol))
             if r is None:
                 lines.append(f"• {esc(name)}: 데이터 없음")
                 continue
@@ -292,10 +295,6 @@ def build_report() -> str:
     lines.append("<i>※ ▲=현재가가 해당 이평선 위 / ▼=아래. 참고용 정보입니다.</i>")
     return "\n".join(lines)
 
-
-# ============================================================
-# 실행
-# ============================================================
 
 if __name__ == "__main__":
     report = build_report()
