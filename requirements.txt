@@ -1,4 +1,3 @@
-pykrx
 requests
 yfinance
 anthropic
