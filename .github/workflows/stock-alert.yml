@@ -1,0 +1,32 @@
+name: Stock Alert Bot
+ 
+on:
+  schedule:
+    # UTC 기준입니다. 한국시간(KST) = UTC + 9시간.
+    # 아래는 매일 오후 2:10(KST)에 실행되도록 한 설정입니다.
+    #   14:10 KST = 같은 날 05:10 UTC (날짜 안 넘어감)
+    #   매일이므로 요일 칸은 * (모든 요일)
+    - cron: '10 5 * * *'
+  # 수동 실행 버튼 (테스트용). 스케줄 등록을 위해서도 권장됩니다.
+  workflow_dispatch:
+ 
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+ 
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+ 
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
+ 
+      - name: 알림 실행
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python stock_alert_bot.py
