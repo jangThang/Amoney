@@ -3,8 +3,8 @@ name: Stock Alert Bot
 on:
   schedule:
     # UTC 기준입니다. 한국시간(KST) = UTC + 9시간.
-    # 매일 오후 2:10(KST) 실행 = 같은 날 05:10 UTC
-    - cron: '10 5 * * *'
+    # 매일 오전 8:50(KST) 실행 = 전날 23:50 UTC
+    - cron: '50 23 * * *'
   workflow_dispatch:   # 수동 실행 버튼 (테스트용)
 
 jobs:
@@ -26,5 +26,5 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # 선택: 없으면 뉴스 제목만 표시
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # 선택: 없으면 뉴스 제목만
         run: python stock_alert_bot.py
