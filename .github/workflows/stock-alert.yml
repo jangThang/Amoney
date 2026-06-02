@@ -4,7 +4,7 @@ on:
   schedule:
     # UTC 기준입니다. 한국시간(KST) = UTC + 9시간.
     # 매일 오전 8:50(KST) 실행 = 전날 23:50 UTC
-    - cron: '50 23 * * *'
+    - cron: '40 23 * * *'
   workflow_dispatch:   # 수동 실행 버튼 (테스트용)
 
 jobs:
