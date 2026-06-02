@@ -18,7 +18,7 @@ import html
 import requests
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 
 import yfinance as yf
@@ -42,6 +42,8 @@ PERIODS = [("오늘", 1), ("주간", 5), ("월간", 20)]
 MA_WINDOWS = [20, 60, 120]
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+KST = timezone(timedelta(hours=9))   # 한국 표준시 (UTC+9)
 
 FG_KO = {
     "extreme fear": ("극도의 공포", "😱"),
@@ -230,7 +232,7 @@ def summarize_news(titles):
 # ============================================================
 
 def build_report() -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
     # ---- 시세 한 번만 수집 (요약·상세 공용) ----
     etfs = [(name, safe_analyze(sym)) for sym, name in HOLDINGS.items()]
